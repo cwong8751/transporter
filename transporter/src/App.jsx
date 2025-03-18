@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
+import { Button, Typography, CircularProgress, List, ListItem, ListItemText, Container, Card, Box, CardContent, AppBar, Toolbar } from "@mui/material";
 import './App.css';
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import { Logout } from "@mui/icons-material";
 
 function App() {
     const [guideText, setGuideText] = useState("To start using Transporter, we need you to login to Spotify.");
@@ -7,6 +10,8 @@ function App() {
     const [spotifyAllSongs, setSpotifyAllSongs] = useState([]);
     const [progress, setProgress] = useState(0);
     const [isLoading, setIsLoading] = useState(false);
+    const [userProfile, setUserProfile] = useState(null);
+    const [disableExport, setDisableExport] = useState(false);
 
 
     const generateCodeVerifier = () => {
@@ -39,7 +44,13 @@ function App() {
         if (localStorage.getItem("spotify_access_token")) {
             setGuideText("You are now logged in with Spotify.");
             setHideSpotifyButton(true);
-            fetchAllUserSongs(); // start getting all spotify songs 
+            //fetchAllUserSongs(); // start getting all spotify songs 
+
+            // get spotify user profile
+            fetchSpotifyProfile().then(data => {
+                setUserProfile(data);
+            }
+            );
         } else {
             setHideSpotifyButton(false);
         }
@@ -81,6 +92,10 @@ function App() {
                 setHideSpotifyButton(true);
 
                 cleanUpURL();
+
+                fetchSpotifyProfile().then(data => {
+                    setUserProfile(data);
+                });
             } else {
                 //TODO
             }
@@ -96,8 +111,24 @@ function App() {
             headers: { Authorization: `Bearer ${token}` },
         });
 
+        // handle unauthorized
+        if (response.status === 401) {
+            console.error("Unauthorized! Token might have expired.");
+            logOut();
+            return
+        }
+
+        if (!response.ok) {
+            // Handle other non-2xx HTTP errors
+            console.error(`HTTP error! status: ${response.status}`);
+            logOut();
+            return null; // or throw an error, or return a specific error object
+        }
+
         const data = await response.json();
-        console.log("User Profile:", data);
+        //console.log("User Profile:", data);
+
+        return data;
     };
 
     const handleLogin = async () => {
@@ -251,38 +282,162 @@ function App() {
         localStorage.removeItem("spotify_access_token");
         setGuideText("To start using Transporter, we need you to login to Spotify.");
         setHideSpotifyButton(false);
+        setSpotifyAllSongs([]);
+        setUserProfile(null);
+    }
+
+    const handleExport = () => {
+        console.log("exporting songs");
+
+        // what we want, for now. if we modify this, remember to modify sheet db too. 
+
+        //console.log(JSON.stringify(spotifyAllSongs, null, 2));
+
+        var filteredSongs = spotifyAllSongs.map(song => {
+            if (!song.track) return null; // Skip if track is missing
+
+            const track = song.track;
+
+            return {
+                track_name: track.name,
+                artists: track.artists.map(artist => artist.name).join(", "), // Convert array to string
+                ava_markets: track.available_markets.join(", "), // Convert array to string
+                duration_ms: track.duration_ms,
+                explicit: track.explicit ? "Yes" : "No",
+                track_href: track.external_urls?.spotify || "N/A", // Get Spotify URL or fallback
+                track_spotify_id: track.id,
+                track_popularity: track.popularity
+            };
+        }).filter(song => song !== null);
+
+        // wrap it per sheet db format
+        filteredSongs = { data: filteredSongs };
+
+        //console.log(JSON.stringify(filteredSongs, null, 2));
+
+        //we are using the sheet db
+        fetch('https://sheetdb.io/api/v1/gwok4o6b5xf23', {
+            method: 'POST',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(filteredSongs)
+        })
+            .then((response) => {
+                if (!response.ok) {
+                    return response.json().then((err) => {
+                        setGuideText(`Error ${response.status}: ${err.message || 'Something went wrong'}`);
+                        throw new Error(`Error ${response.status}: ${err.message || 'Something went wrong'}`);
+                       
+                    });
+                }
+                return response.json();
+            })
+            .then((data) => console.log(data));
+
+        setDisableExport(true);
+        setGuideText("Your songs are exported, thank you for using Transporter");
     }
 
     return (
-        <>
-            <h1>Transporter</h1>
-            <h2>{guideText}</h2>
+        <Container maxWidth="sm" style={{ textAlign: "center", marginTop: "20px" }}>
+            <AppBar>
+                <Toolbar>
+                    <Typography variant="h6" component="div" sx={{ flexGrow: 0 }}>
+                        Transporter
+                    </Typography>
+                </Toolbar>
+            </AppBar>
+
+            <Typography sx={{ marginTop: '50px' }} variant="h5" color="textSecondary">
+                {guideText}
+            </Typography>
+
             {!hideSpotifyButton ? (
-                <button onClick={handleLogin}>Login with Spotify</button>
+                <Button variant="contained" color="primary" onClick={handleLogin} sx={{ mt: 2 }}>
+                    Login with Spotify
+                </Button>
             ) : (
                 <>
-                    {/* <button onClick={fetchSpotifyProfile}>Fetch Spotify Profile</button> */}
-                    <button onClick={logOut}>Log Out</button>
+                    <Box sx={{ display: 'flex', gap: 2, mt: 2, justifyContent: 'center' }}> {/* Use Box for inline layout */}
+                        <Button variant="contained" onClick={fetchAllUserSongs}>
+                            Get Spotify Liked Songs
+                        </Button>
+                        <Button variant="contained" color="secondary" onClick={logOut}>
+                            Log Out
+                        </Button>
+                    </Box>
                 </>
             )}
+
+            {userProfile && (
+                <Card sx={{ maxWidth: 345, margin: "auto", mt: 4, boxShadow: 3, borderRadius: 2 }}>
+                    <CardContent>
+                        <Typography gutterBottom variant="h5" component="div">
+                            Spotify Profile
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            {userProfile.display_name}
+                        </Typography>
+                        <Button
+                            variant="contained"
+                            color="primary"
+                            href={userProfile.external_urls.spotify}
+                            target="_blank"
+                            rel="noreferrer"
+                            endIcon={<OpenInNewIcon />}
+                            sx={{ mt: 2 }}
+                        >
+                            Your Profile on Spotify
+                        </Button>
+                    </CardContent>
+                </Card>
+            )}
+
             {isLoading && (
-                <div>
-                    <p>Fetched {Math.round(progress)} songs... </p>
+                <div style={{ marginTop: "20px" }}>
+                    <CircularProgress />
+                    <Typography variant="body1" sx={{ mt: 1 }}>
+                        Fetched {Math.round(progress)} songs...
+                    </Typography>
                 </div>
             )}
-            {spotifyAllSongs.length > 0 && (
-                <div>
-                    <h3>All Songs:</h3>
-                    <ul>
-                        {spotifyAllSongs.map((song, index) => (
-                            <li key={index}>
-                                {song.track.name} by {song.track.artists.map(artist => artist.name).join(", ")}
-                            </li>
-                        ))}
-                    </ul>
+
+            {spotifyAllSongs && spotifyAllSongs.length > 0 && (
+                <div style={{ marginTop: '20px' }}>
+                    <Typography variant="h6">All Songs:</Typography>
+                    <div style={{ maxHeight: '300px', overflowY: 'auto' }}> {/* Fixed height and scroll */}
+                        <List>
+                            {spotifyAllSongs.map((song, index) => (
+                                <ListItem key={index}>
+                                    <ListItemText
+                                        primary={song.track.name}
+                                        secondary={
+                                            <>
+                                                <ul>
+                                                    <li> Artists:
+                                                        {song.track.artists.map(artist => artist.name).join(', ')}</li>
+                                                    <li>Available markets: {song.track.available_markets}</li>
+                                                    <li>Duration (ms): {song.track.duration_ms}</li>
+                                                    <li>Explicit (Yes/No): {song.track.explicit}</li>
+                                                    <li>Track details (spotify link): {song.track.href}</li>
+                                                    <li>Spotify ID: {song.track.id}</li>
+                                                    <li>Popularity: {song.track.popularity}</li>
+                                                </ul>
+                                            </>
+                                        }
+                                    />
+                                </ListItem>
+                            ))}
+                        </List>
+                    </div>
                 </div>
             )}
-        </>
+            <Button disabled={disableExport} variant="contained" color="success" sx={{ mt: 2 }} onClick={handleExport}>
+                Export
+            </Button>
+        </Container>
     );
 }
 
